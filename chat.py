@@ -1,255 +1,248 @@
-import json
-import datetime
 from typing import Dict, Any, Optional, Union
 from fastapi import WebSocket, WebSocketDisconnect, HTTPException, status
-from fastapi.websockets import WebSocketState  # Import WebSocketState
+from fastapi.websockets import WebSocketState
 from jose import JWTError, jwt
 from sqlalchemy.orm import Session
 
 from auth import SECRET_KEY, ALGORITHM
-from db import Message, User, Group, user_group  # Import user_group for membership check
+from db import Message, User, Group, user_group
 
 
-# Custom exception for connect failures that occur after websocket.accept()
 class WebSocketConnectError(Exception):
     def __init__(self, message: str, code: int = status.WS_1008_POLICY_VIOLATION):
         self.message = message
         self.code = code
-        super().__init__(self.message)
+        super().__init__(message)
 
 
 class ConnectionManager:
     def __init__(self):
-        self.active_connections: Dict[int, Dict[str, Any]] = {}
-        self.connection_counter: int = 0
+        # 连接池：{connection_id: {"websocket": websocket, "user": user, "group_id": group_id}}
+        self.active_connections = {}
+        # 计数器用于生成唯一连接ID
+        self.connection_id_counter = 0
 
     async def connect(self, websocket: WebSocket, user: User, group_id: int, db: Session) -> int:
-        # This method assumes websocket.accept() has been called by the endpoint
-        # and will raise WebSocketConnectError if validation fails.
+        """添加新的WebSocket连接"""
+        await websocket.accept()
 
-        group = db.query(Group).filter(Group.id == group_id).first()
-        if not group:
-            raise WebSocketConnectError("群组不存在")
+        # 生成连接ID
+        self.connection_id_counter += 1
+        connection_id = self.connection_id_counter
 
-        # Efficient membership check using the association table
-        is_member_stmt = user_group.select().where(
-            user_group.c.user_id == user.id,
-            user_group.c.group_id == group_id
-        )
-        is_member = db.execute(is_member_stmt).first()
-        if not is_member:
-            raise WebSocketConnectError("用户不在该群组中", code=status.WS_1003_UNSUPPORTED_DATA)
-
-        self.connection_counter += 1
-        connection_id = self.connection_counter
+        # 将连接添加到活跃连接池
         self.active_connections[connection_id] = {
             "websocket": websocket,
             "user": user,
             "group_id": group_id
         }
 
-        join_message_content = f"{user.username} 加入了聊天"
+        print(f"已分配连接ID {connection_id} 给用户 {user.username}")
+
+        # 通知群组有新用户加入
         await self.broadcast_to_group(
-            group_id=group_id,
-            message=json.dumps({
-                "id": f"system-join-{datetime.datetime.now().timestamp()}-{user.id}",
-                "content": join_message_content,
-                "created_at": datetime.datetime.now().isoformat(),
-                "message_type": "system",
-                "sender": {"id": "system", "username": "系统消息"}  # System messages can have a conventional sender
-            })
+            group_id,
+            f"{user.username} 进入了聊天室",
+            skip_connection_id=connection_id
         )
+
         return connection_id
 
-    async def disconnect(self, connection_id: int) -> None:
-        if connection_id in self.active_connections:
-            connection_details = self.active_connections.pop(connection_id)  # Use pop to remove
-            user = connection_details["user"]
-            group_id = connection_details["group_id"]
+    async def disconnect(self, connection_id: int, db: Session = None) -> None:
+        """处理连接断开"""
+        if connection_id not in self.active_connections:
+            return
 
-            # Check if there are other connections for this user in this group (e.g. multiple tabs)
-            # This logic might be too complex if not needed. For now, assume one connection per user-group context.
+        connection_info = self.active_connections[connection_id]
+        user = connection_info["user"]
+        group_id = connection_info["group_id"]
 
-            leave_message_content = f"{user.username} 离开了聊天"
-            await self.broadcast_to_group(
-                group_id=group_id,
-                message=json.dumps({
-                    "id": f"system-leave-{datetime.datetime.now().timestamp()}-{user.id}",
-                    "content": leave_message_content,
-                    "created_at": datetime.datetime.now().isoformat(),
-                    "message_type": "system",
-                    "sender": {"id": "system", "username": "系统消息"}
-                })
-            )
-            print(f"User {user.username} disconnected from group {group_id}. Connection ID {connection_id} removed.")
+        print(f"用户 {user.username} 的连接ID {connection_id} 已断开")
+
+        # 从连接池中移除
+        del self.active_connections[connection_id]
+
+        # 通知群组有用户离开
+        await self.broadcast_to_group(
+            group_id,
+            f"{user.username} 离开了聊天室"
+        )
 
     async def broadcast_to_group(self, group_id: int, message: str, skip_connection_id: Optional[int] = None) -> None:
-        # Iterate over a copy of items in case the dictionary changes during iteration (though less likely here)
-        for conn_id, connection in list(self.active_connections.items()):
+        """向群组内的所有连接广播系统消息"""
+        for conn_id, connection in self.active_connections.items():
+            if skip_connection_id == conn_id:
+                continue
+
             if connection["group_id"] == group_id:
-                if skip_connection_id is not None and conn_id == skip_connection_id:
-                    continue
-                try:
-                    # Check websocket state before sending
-                    if connection["websocket"].client_state == WebSocketState.CONNECTED:
-                        await connection["websocket"].send_text(message)
-                    else:  # Stale connection, consider removing
-                        print(f"Skipping broadcast to stale connection ID {conn_id}")
-                        # Potentially schedule this connection for cleanup if it's persistently not connected
-                except Exception as e:  # Catch broader exceptions during send
-                    print(f"Error broadcasting message to connection ID {conn_id}: {str(e)}")
-                    # Consider removing problematic connections here or marking them for removal
+                websocket = connection["websocket"]
+                if websocket.client_state == WebSocketState.CONNECTED:
+                    try:
+                        await websocket.send_json({
+                            "type": "system_message",
+                            "content": message
+                        })
+                    except Exception as e:
+                        print(f"发送消息到连接 {conn_id} 失败: {str(e)}")
 
     def get_user_by_connection_id(self, connection_id: int) -> Union[User, None]:
+        """通过连接ID获取用户"""
         connection = self.active_connections.get(connection_id)
-        return connection["user"] if connection else None
+        if connection:
+            return connection["user"]
+        return None
 
 
+# 全局连接管理器实例
 manager = ConnectionManager()
 
 
 async def get_websocket_user(websocket: WebSocket, db: Session) -> User:
+    """从WebSocket请求中获取用户信息"""
+    print(f"调试信息: 尝试通过token验证WebSocket用户 (来自 {websocket.client.host})")
     token = websocket.query_params.get("token")
     credentials_exception = WebSocketDisconnect(code=status.WS_1008_POLICY_VIOLATION, reason="认证失败")
 
     if not token:
-        # Note: if we await websocket.close() here, the function might not return to the caller
-        # to allow it to accept first. It's better to raise and let the main endpoint handle closing.
-        raise credentials_exception  # Let endpoint handle closing after accept if needed
+        raise WebSocketConnectError("缺少认证token", code=status.WS_1008_POLICY_VIOLATION)
 
     try:
+        # 解码JWT
         payload = jwt.decode(token, SECRET_KEY, algorithms=[ALGORITHM])
-        username: Optional[str] = payload.get("sub")
+        username = payload.get("sub")
         if username is None:
             raise credentials_exception
     except JWTError:
-        raise credentials_exception
+        raise WebSocketConnectError("无效的token", code=status.WS_1008_POLICY_VIOLATION)
 
     user = db.query(User).filter(User.username == username).first()
     if user is None:
-        raise credentials_exception
-    if not user.is_active:  # Check if user is active
-        raise WebSocketDisconnect(code=status.WS_1008_POLICY_VIOLATION, reason="用户未激活")
+        raise WebSocketConnectError("用户不存在", code=status.WS_1008_POLICY_VIOLATION)
+
+    if not user.is_active:
+        raise WebSocketConnectError("用户已禁用", code=status.WS_1008_POLICY_VIOLATION)
+
+    # 更新用户最后活动时间
+    user.last_activity = None
+    db.commit()
+
+    print(f"WebSocket连接用户验证成功: {username}")
     return user
 
 
 async def chat_websocket_endpoint(websocket: WebSocket, db: Session) -> None:
-    user: Optional[User] = None
-    connection_id: Optional[int] = None
-    group_id_int: Optional[int] = None
+    """处理聊天WebSocket连接"""
+    print(f"调试信息: WebSocket连接尝试: {websocket.client.host}:{websocket.client.port}")
+    user = None
+    connection_id = None
+    group_id_int = None
 
     try:
-        # Perform authentication and initial param checks BEFORE accept if they lead to immediate rejection
-        # If these raise WebSocketDisconnect, it will be caught below.
+        # 获取群组ID
+        group_id = websocket.query_params.get("group_id")
+        if not group_id:
+            raise WebSocketConnectError("缺少群组ID")
+
+        try:
+            group_id_int = int(group_id)
+        except ValueError:
+            raise WebSocketConnectError("无效的群组ID")
+
+        # 验证用户
         user = await get_websocket_user(websocket, db)
 
-        group_id_str = websocket.query_params.get("group_id")
-        if not group_id_str:
-            raise WebSocketDisconnect(code=status.WS_1008_POLICY_VIOLATION, reason="缺少群组ID")
+        # 验证群组是否存在
+        group = db.query(Group).filter(Group.id == group_id_int).first()
+        if not group:
+            raise WebSocketConnectError("群组不存在")
 
-        try:
-            group_id_int = int(group_id_str)
-        except ValueError:
-            raise WebSocketDisconnect(code=status.WS_1008_POLICY_VIOLATION, reason="无效的群组ID格式")
+        # 验证用户是否在群组中
+        user_in_group = db.query(user_group).filter(
+            user_group.c.user_id == user.id,
+            user_group.c.group_id == group_id_int
+        ).first()
 
-        # If initial checks pass, accept the connection
-        await websocket.accept()
+        if not user_in_group:
+            raise WebSocketConnectError("用户不在该群组中")
 
-        # Now, try to fully connect the user to the group via the manager
-        # This involves further DB checks (group existence, membership)
-        try:
-            connection_id = await manager.connect(websocket, user, group_id_int, db)
-        except WebSocketConnectError as e:
-            # This error happens AFTER accept, so we can send a message
-            await websocket.send_text(json.dumps({"type": "connection_error", "error": e.message}))
-            await websocket.close(code=e.code)  # Close with the code from the exception
-            return  # Exit endpoint
+        print(f"用户 {user.username} 正在连接到群组 {group_id_int}")
 
-        # Main message loop
+        # 建立连接
+        print(f"WebSocket已接受来自用户 {user.username} 的连接至群组 {group_id_int}")
+        connection_id = await manager.connect(websocket, user, group_id_int, db)
+
+        # 持续接收消息
         while True:
-            data = await websocket.receive_text()
-            message_data = json.loads(data)  # Assume valid JSON for now, add try-except for robustness
+            message_data = await websocket.receive_json()
 
-            # Handle client-side "init" message if it's part of your protocol
-            if message_data.get("type") == "init":
-                await websocket.send_text(json.dumps({
-                    "type": "init_confirm", "message": "连接已初始化",
-                    "timestamp": datetime.datetime.now().isoformat()
-                }))
-                continue
+            # 处理不同类型的消息
+            if message_data.get("type") == "chat_message":
+                content = message_data.get("content", "").strip()
 
-            content = message_data.get("content", "").strip()
-            if not content:  # Ignore empty messages or send an error
-                await websocket.send_text(json.dumps({
-                    "type": "message_error", "error": "消息内容不能为空",
-                    "timestamp": datetime.datetime.now().isoformat()
-                }))
-                continue
+                if content and len(content) <= 1000:  # 限制消息长度
+                    # 创建新消息并保存到数据库
+                    new_message = Message(
+                        content=content,
+                        sender_id=user.id,
+                        group_id=group_id_int,
+                        message_type="text"
+                    )
+                    db.add(new_message)
+                    db.commit()
+                    db.refresh(new_message)
 
-            db_message = Message(
-                content=content,
-                sender_id=user.id,  # user is guaranteed to be non-None here
-                group_id=group_id_int,  # group_id_int is guaranteed non-None
-                message_type="text"  # Default to text for now, extend for file/image later
-            )
-            db.add(db_message)
-            db.commit()
-            db.refresh(db_message)
+                    # 准备发送的消息数据
+                    message_response = {
+                        "id": new_message.id,
+                        "content": new_message.content,
+                        "created_at": new_message.created_at.isoformat(),
+                        "sender_id": new_message.sender_id,
+                        "group_id": new_message.group_id,
+                        "message_type": new_message.message_type,
+                        "sender": {
+                            "id": user.id,
+                            "username": user.username,
+                            "avatar_url": user.avatar_url
+                        }
+                    }
 
-            # Construct sender object for the message
-            # Ensure avatar_url is available on the user object or fetch if necessary
-            # For simplicity, assuming user.avatar_url is populated
-            sender_info = {
-                "id": user.id,
-                "username": user.username,
-                "avatar_url": user.avatar_url,
-                "status": user.status  # Assuming status is available
-            }
-
-            response_data = {
-                "id": db_message.id,
-                "content": db_message.content,
-                "created_at": db_message.created_at.isoformat(),
-                "sender_id": user.id,  # Redundant if sender object is present
-                "group_id": group_id_int,
-                "message_type": db_message.message_type,
-                "sender": sender_info
-            }
-            await manager.broadcast_to_group(group_id_int, json.dumps(response_data))
+                    # 广播消息到群组
+                    for conn_id, connection in manager.active_connections.items():
+                        if connection["group_id"] == group_id_int:
+                            try:
+                                await connection["websocket"].send_json({
+                                    "type": "chat_message",
+                                    "message": message_response
+                                })
+                            except Exception as e:
+                                print(f"发送消息到连接 {conn_id} 失败: {str(e)}")
 
     except WebSocketDisconnect as e:
-        # This catches disconnects from get_websocket_user, param checks before accept,
-        # or client disconnecting.
-        print(f"WebSocket disconnected: Code {e.code}, Reason: {e.reason or 'N/A'}")
-        if connection_id is not None:  # If connection was fully established
-            await manager.disconnect(connection_id)
-        # If websocket is not already closed by FastAPI/Starlette due to the exception
-        if websocket.client_state != WebSocketState.DISCONNECTED:
-            try:
-                await websocket.close(code=e.code)
-            except RuntimeError:  # Handle cases where websocket might already be closed
-                pass
+        print(f"WebSocket断开连接: 用户 {user.username if user else '未知'} (连接ID {connection_id})")
+        # 处理连接断开
+        if connection_id is not None:
+            await manager.disconnect(connection_id, db)
 
-    except json.JSONDecodeError:
-        if websocket.client_state == WebSocketState.CONNECTED:
-            await websocket.send_text(json.dumps({
-                "type": "error", "error": "无效的JSON格式",
-                "timestamp": datetime.datetime.now().isoformat()
-            }))
-        # Optionally close connection for malformed JSON if it's persistent
+    except WebSocketConnectError as e:
+        print(f"WebSocket连接错误: {e.message}")
+        # 尝试关闭连接
+        try:
+            await websocket.close(code=e.code, reason=e.message)
+        except Exception:
+            pass
 
     except Exception as e:
-        print(
-            f"Unhandled WebSocket error for user {user.username if user else 'Unknown'} in group {group_id_int if group_id_int else 'Unknown'}: {str(e)}")
+        print(f"WebSocket处理错误: {str(e)}")
+        # 尝试关闭连接
+        try:
+            await websocket.close(code=status.WS_1011_INTERNAL_ERROR)
+        except Exception:
+            pass
+        # 处理连接断开
         if connection_id is not None:
-            await manager.disconnect(connection_id)
-        if websocket.client_state != WebSocketState.DISCONNECTED:
-            try:
-                await websocket.close(code=status.WS_1011_INTERNAL_ERROR)
-            except RuntimeError:
-                pass
+            await manager.disconnect(connection_id, db)
+
     finally:
-        # If connection_id was assigned but an error occurred before normal disconnect
+        # 如果连接ID存在且连接依然在活跃连接列表中，确保断开
         if connection_id is not None and connection_id in manager.active_connections:
-            print(f"Cleaning up connection {connection_id} due to error or unclean exit.")
-            await manager.disconnect(connection_id)
+            await manager.disconnect(connection_id, db)

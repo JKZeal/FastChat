@@ -1,11 +1,10 @@
-from datetime import timedelta
-from typing import List, Optional
 import os
+from datetime import datetime, timedelta
+from typing import List, Optional
 
-from fastapi import APIRouter, Depends, HTTPException, status, UploadFile, File, Form, Path
+from fastapi import APIRouter, Depends, HTTPException, status, UploadFile, File, Form, Path, Query
 from fastapi.responses import FileResponse
 from sqlalchemy.orm import Session
-import sqlalchemy.exc
 
 from auth import (
     get_password_hash,
@@ -14,13 +13,12 @@ from auth import (
     get_current_active_user,
     ACCESS_TOKEN_EXPIRE_MINUTES
 )
-from db import User, Message, Group, get_db
+from db import User, Message, Group, get_db, user_group
 from schema import (
-    UserCreate, UserResponse, Token, UserLogin, GroupCreate, 
+    UserCreate, UserResponse, Token, UserLogin, GroupCreate,
     GroupResponse, GroupDetailResponse, MessageCreate, MessageResponse,
     UserProfile, UserProfileUpdate
 )
-from upload import save_avatar, save_image_message, save_file_message, get_file_url
 
 # 创建路由
 router = APIRouter()
@@ -29,48 +27,49 @@ router = APIRouter()
 # 用户注册
 @router.post("/users/", response_model=UserResponse, status_code=status.HTTP_201_CREATED)
 def create_user(user: UserCreate, db: Session = Depends(get_db)):
-    """创建新用户"""
-    # 检查用户名是否已存在
+    """注册新用户"""
+    # 检查用户名是否存在
     db_user = db.query(User).filter(User.username == user.username).first()
     if db_user:
-        raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST,
-            detail="用户名已被注册"
-        )
-    
+        raise HTTPException(status_code=400, detail="Username already registered")
+
     # 创建新用户
     hashed_password = get_password_hash(user.password)
     db_user = User(
-        username=user.username, 
-        hashed_password=hashed_password
+        username=user.username,
+        hashed_password=hashed_password,
+        created_at=datetime.now(),
+        is_active=True
     )
-    
     db.add(db_user)
     db.commit()
     db.refresh(db_user)
-    
     return db_user
 
 
 # 用户登录
 @router.post("/token", response_model=Token)
-def login_for_access_token(user_data: UserLogin, db: Session = Depends(get_db)):
+def login_for_access_token(user_credentials: UserLogin, db: Session = Depends(get_db)):
     """用户登录获取令牌"""
-    user = authenticate_user(db, user_data.username, user_data.password)
+    user = authenticate_user(db, user_credentials.username, user_credentials.password)
     if not user:
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
-            detail="用户名或密码错误",
+            detail="Incorrect username or password",
             headers={"WWW-Authenticate": "Bearer"},
         )
-    
+
     # 创建访问令牌
     access_token_expires = timedelta(minutes=ACCESS_TOKEN_EXPIRE_MINUTES)
     access_token = create_access_token(
         data={"sub": user.username}, expires_delta=access_token_expires
     )
-    
-    return {"access_token": access_token, "token_type": "bearer"}
+
+    return {
+        "access_token": access_token,
+        "token_type": "bearer",
+        "username": user.username
+    }
 
 
 # 获取当前用户信息
@@ -82,404 +81,310 @@ def read_users_me(current_user: User = Depends(get_current_active_user)):
 
 # 更新用户档案
 @router.put("/users/me/profile", response_model=UserResponse)
-async def update_user_profile(
-    status: Optional[str] = Form(None),
-    bio: Optional[str] = Form(None),
-    avatar: Optional[UploadFile] = File(None),
-    current_user: User = Depends(get_current_active_user),
-    db: Session = Depends(get_db)
+def update_user_profile(
+        profile_data: UserProfileUpdate,
+        current_user: User = Depends(get_current_active_user),
+        db: Session = Depends(get_db)
 ):
-    """更新用户档案"""
-    # 更新头像
-    if avatar:
-        avatar_path = await save_avatar(avatar)
-        current_user.avatar_url = get_file_url(avatar_path)
-    
-    # 更新状态
-    if status is not None:
-        current_user.status = status
-    
-    # 更新简介
-    if bio is not None:
-        current_user.bio = bio
-    
-    # 保存更改
+    """更新用户头像和简介"""
+    current_user.avatar_url = profile_data.avatar_url
+    current_user.bio = profile_data.bio
+
     db.add(current_user)
     db.commit()
     db.refresh(current_user)
-    
+
     return current_user
 
 
-# 搜索群组
+# 添加获取头像列表的API端点
+@router.get("/avatar/list")
+def get_avatar_list():
+    """获取所有可用头像"""
+    avatar_dir = "src/avatar"
+    try:
+        # 获取目录中的所有PNG文件
+        avatar_files = [f"/avatar/{f}" for f in os.listdir(avatar_dir) if f.lower().endswith('.png')]
+        return avatar_files
+    except Exception as e:
+        print(f"获取头像列表失败: {str(e)}")
+        return []
+
+
 # 搜索群组
 @router.get("/groups/search", response_model=List[GroupResponse])
-def search_groups(name: Optional[str] = None, id: Optional[int] = None, db: Session = Depends(get_db)):
-    """根据名称或ID搜索群组"""
-    if id is not None:
-        # 通过ID精确查询
-        group = db.query(Group).filter(Group.id == id).first()
-        return [group] if group else []
-    elif name:
-        # 通过名称模糊查询
-        groups = db.query(Group).filter(Group.name.ilike(f"%{name}%")).all()
-        return groups
-    else:
-        # 未提供查询参数
-        return []
+def search_groups(name: str = Query(None), db: Session = Depends(get_db)):
+    """搜索群组"""
+    query = db.query(Group)
+
+    if name:
+        query = query.filter(Group.name.ilike(f"%{name}%"))
+
+    groups = query.limit(10).all()
+    return groups
 
 
 # 发送文本消息
 @router.post("/messages/", response_model=MessageResponse)
 def create_message(
-    message: MessageCreate, 
-    current_user: User = Depends(get_current_active_user),
-    db: Session = Depends(get_db)
+        message: MessageCreate,
+        current_user: User = Depends(get_current_active_user),
+        db: Session = Depends(get_db)
 ):
-    """发送文本消息"""
-    # 检查群组是否存在
-    group = db.query(Group).filter(Group.id == message.group_id).first()
-    if not group:
-        raise HTTPException(
-            status_code=status.HTTP_404_NOT_FOUND,
-            detail="群组不存在"
-        )
-    
-    # 检查用户是否在群组中
-    if current_user not in group.members:
-        raise HTTPException(
-            status_code=status.HTTP_403_FORBIDDEN,
-            detail="您不是该群组成员"
-        )
-    
-    # 创建新消息
+    """创建新消息"""
+    # 验证用户是否在群组中
+    user_in_group = db.query(user_group).filter(
+        user_group.c.user_id == current_user.id,
+        user_group.c.group_id == message.group_id
+    ).first()
+
+    if not user_in_group:
+        raise HTTPException(status_code=403, detail="User not in group")
+
+    # 创建消息
     db_message = Message(
         content=message.content,
         message_type=message.message_type,
-        file_url=message.file_url,
-        file_name=message.file_name,
-        file_size=message.file_size,
         sender_id=current_user.id,
-        group_id=message.group_id
+        group_id=message.group_id,
+        created_at=datetime.now()
     )
-    
+
     db.add(db_message)
     db.commit()
     db.refresh(db_message)
-    
-    # 关联发送者
-    db_message.sender = current_user
-    
-    return db_message
 
-
-# 发送图片消息
-@router.post("/messages/image", response_model=MessageResponse)
-async def create_image_message(
-    group_id: int = Form(...),
-    image: UploadFile = File(...),
-    current_user: User = Depends(get_current_active_user),
-    db: Session = Depends(get_db)
-):
-    """发送图片消息"""
-    # 检查群组是否存在
-    group = db.query(Group).filter(Group.id == group_id).first()
-    if not group:
-        raise HTTPException(
-            status_code=status.HTTP_404_NOT_FOUND,
-            detail="群组不存在"
-        )
-    
-    # 检查用户是否在群组中
-    if current_user not in group.members:
-        raise HTTPException(
-            status_code=status.HTTP_403_FORBIDDEN,
-            detail="您不是该群组成员"
-        )
-    
-    # 保存图片
-    image_path = await save_image_message(image)
-    file_url = get_file_url(image_path)
-    
-    # 创建新消息
-    db_message = Message(
-        content="[图片]",
-        message_type="image",
-        file_url=file_url,
-        file_name=image.filename,
-        file_size=os.path.getsize(os.path.join("uploads", image_path)) if os.path.exists(os.path.join("uploads", image_path)) else 0,
-        sender_id=current_user.id,
-        group_id=group_id
-    )
-    
-    db.add(db_message)
-    db.commit()
-    db.refresh(db_message)
-    
-    # 关联发送者
-    db_message.sender = current_user
-    
-    return db_message
-
-
-# 发送文件消息
-@router.post("/messages/file", response_model=MessageResponse)
-async def create_file_message(
-    group_id: int = Form(...),
-    file: UploadFile = File(...),
-    current_user: User = Depends(get_current_active_user),
-    db: Session = Depends(get_db)
-):
-    """发送文件消息"""
-    # 检查群组是否存在
-    group = db.query(Group).filter(Group.id == group_id).first()
-    if not group:
-        raise HTTPException(
-            status_code=status.HTTP_404_NOT_FOUND,
-            detail="群组不存在"
-        )
-    
-    # 检查用户是否在群组中
-    if current_user not in group.members:
-        raise HTTPException(
-            status_code=status.HTTP_403_FORBIDDEN,
-            detail="您不是该群组成员"
-        )
-    
-    # 保存文件
-    file_path = await save_file_message(file)
-    file_url = get_file_url(file_path)
-    
-    # 创建新消息
-    db_message = Message(
-        content=f"[文件] {file.filename}",
-        message_type="file",
-        file_url=file_url,
-        file_name=file.filename,
-        file_size=os.path.getsize(os.path.join("uploads", file_path)) if os.path.exists(os.path.join("uploads", file_path)) else 0,
-        sender_id=current_user.id,
-        group_id=group_id
-    )
-    
-    db.add(db_message)
-    db.commit()
-    db.refresh(db_message)
-    
-    # 关联发送者
-    db_message.sender = current_user
-    
     return db_message
 
 
 # 获取所有消息
 @router.get("/messages/", response_model=List[MessageResponse])
 def read_messages(
-    current_user: User = Depends(get_current_active_user),
-    db: Session = Depends(get_db)
+        skip: int = 0,
+        limit: int = 100,
+        current_user: User = Depends(get_current_active_user),
+        db: Session = Depends(get_db)
 ):
-    """获取用户的所有消息"""
-    # 获取用户所在的所有群组的ID
-    group_ids = [group.id for group in current_user.groups]
-    
-    # 获取这些群组中的所有消息
-    messages = db.query(Message).filter(Message.group_id.in_(group_ids)).all()
-    
+    """获取所有消息"""
+    messages = db.query(Message).offset(skip).limit(limit).all()
     return messages
 
 
 # 群组相关路由
 @router.post("/groups/", response_model=GroupResponse, status_code=status.HTTP_201_CREATED)
 def create_group(
-    group: GroupCreate,
-    current_user: User = Depends(get_current_active_user),
-    db: Session = Depends(get_db)
+        group: GroupCreate,
+        current_user: User = Depends(get_current_active_user),
+        db: Session = Depends(get_db)
 ):
     """创建新群组"""
+    # 检查同名群组
+    existing_group = db.query(Group).filter(Group.name == group.name).first()
+    if existing_group:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Group with this name already exists"
+        )
+
     # 创建群组
     db_group = Group(
         name=group.name,
-        description=group.description
+        description=group.description,
+        creator_id=current_user.id,
+        created_at=datetime.now()
     )
-    
+
     db.add(db_group)
     db.commit()
     db.refresh(db_group)
-    
-    # 将创建者添加为群组成员
-    db_group.members.append(current_user)
+
+    # 将创建者添加到群组
+    stmt = user_group.insert().values(
+        user_id=current_user.id,
+        group_id=db_group.id,
+        joined_at=datetime.now()
+    )
+    db.execute(stmt)
     db.commit()
-    
+
     return db_group
 
 
 @router.get("/groups/", response_model=List[GroupResponse])
 def read_user_groups(
-    current_user: User = Depends(get_current_active_user),
-    db: Session = Depends(get_db)
+        current_user: User = Depends(get_current_active_user),
+        db: Session = Depends(get_db)
 ):
-    """获取当前用户所在的所有群组"""
-    return current_user.groups
+    """获取用户所在的所有群组"""
+    # 获取用户所在的群组
+    groups = db.query(Group).join(
+        user_group,
+        user_group.c.group_id == Group.id
+    ).filter(
+        user_group.c.user_id == current_user.id
+    ).all()
+
+    return groups
 
 
 @router.get("/groups/{group_id}", response_model=GroupDetailResponse)
-def read_group(
-    group_id: int,
-    current_user: User = Depends(get_current_active_user),
-    db: Session = Depends(get_db)
+def get_group_details(
+        group_id: int,
+        current_user: User = Depends(get_current_active_user),
+        db: Session = Depends(get_db)
 ):
     """获取群组详情"""
+    # 检查群组是否存在
     group = db.query(Group).filter(Group.id == group_id).first()
     if not group:
-        raise HTTPException(
-            status_code=status.HTTP_404_NOT_FOUND,
-            detail="群组不存在"
-        )
-    
+        raise HTTPException(status_code=404, detail="Group not found")
+
+    # 检查用户是否在群组中
+    user_in_group = db.query(user_group).filter(
+        user_group.c.user_id == current_user.id,
+        user_group.c.group_id == group_id
+    ).first()
+
+    if not user_in_group:
+        raise HTTPException(status_code=403, detail="User not in group")
+
     return group
 
 
 @router.post("/groups/{group_id}/join", response_model=GroupDetailResponse)
 def join_group(
-    group_id: int,
-    current_user: User = Depends(get_current_active_user),
-    db: Session = Depends(get_db)
+        group_id: int,
+        current_user: User = Depends(get_current_active_user),
+        db: Session = Depends(get_db)
 ):
     """加入群组"""
+    # 检查群组是否存在
     group = db.query(Group).filter(Group.id == group_id).first()
     if not group:
-        raise HTTPException(
-            status_code=status.HTTP_404_NOT_FOUND,
-            detail="群组不存在"
+        raise HTTPException(status_code=404, detail="Group not found")
+
+    # 检查是否已在群组中
+    user_in_group = db.query(user_group).filter(
+        user_group.c.user_id == current_user.id,
+        user_group.c.group_id == group_id
+    ).first()
+
+    if not user_in_group:
+        # 加入群组
+        stmt = user_group.insert().values(
+            user_id=current_user.id,
+            group_id=group_id,
+            joined_at=datetime.now()
         )
-    
-    # 检查用户是否已在群组中
-    if current_user in group.members:
-        raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST,
-            detail="您已经是该群组成员"
-        )
-    
-    # 将用户添加到群组
-    group.members.append(current_user)
-    db.commit()
-    db.refresh(group)
-    
+        db.execute(stmt)
+        db.commit()
+
     return group
 
 
 @router.post("/groups/{group_id}/leave")
 def leave_group(
-    group_id: int,
-    current_user: User = Depends(get_current_active_user),
-    db: Session = Depends(get_db)
+        group_id: int,
+        current_user: User = Depends(get_current_active_user),
+        db: Session = Depends(get_db)
 ):
-    """退出群组"""
+    """离开群组"""
+    # 检查群组是否存在
     group = db.query(Group).filter(Group.id == group_id).first()
     if not group:
-        raise HTTPException(
-            status_code=status.HTTP_404_NOT_FOUND,
-            detail="群组不存在"
-        )
-    
-    # 检查用户是否在群组中
-    if current_user not in group.members:
-        raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST,
-            detail="您不是该群组成员"
-        )
-    
-    # 将用户从群组中移除
-    group.members.remove(current_user)
+        raise HTTPException(status_code=404, detail="Group not found")
+
+    # 检查是否在群组中
+    user_in_group = db.query(user_group).filter(
+        user_group.c.user_id == current_user.id,
+        user_group.c.group_id == group_id
+    ).first()
+
+    if not user_in_group:
+        raise HTTPException(status_code=403, detail="User not in group")
+
+    # 如果是创建者，不允许离开
+    if group.creator_id == current_user.id:
+        raise HTTPException(status_code=400, detail="Creator cannot leave group")
+
+    # 离开群组
+    stmt = user_group.delete().where(
+        user_group.c.user_id == current_user.id,
+        user_group.c.group_id == group_id
+    )
+    db.execute(stmt)
     db.commit()
-    
-    return {"detail": "已成功退出群组"}
+
+    return {"message": "Left group successfully"}
 
 
 # 群组消息相关路由
 @router.post("/groups/{group_id}/messages/", response_model=MessageResponse)
 def create_group_message(
-    group_id: int,
-    message: MessageCreate,
-    current_user: User = Depends(get_current_active_user),
-    db: Session = Depends(get_db)
+        group_id: int,
+        message: MessageCreate,
+        current_user: User = Depends(get_current_active_user),
+        db: Session = Depends(get_db)
 ):
-    """在特定群组中发送消息"""
-    # 检查群组是否存在
-    group = db.query(Group).filter(Group.id == group_id).first()
-    if not group:
-        raise HTTPException(
-            status_code=status.HTTP_404_NOT_FOUND,
-            detail="群组不存在"
-        )
-    
-    # 检查用户是否在群组中
-    if current_user not in group.members:
-        raise HTTPException(
-            status_code=status.HTTP_403_FORBIDDEN,
-            detail="您不是该群组成员"
-        )
-    
-    # 创建新消息
+    """在群组中发送消息"""
+    # 验证用户是否在群组中
+    user_in_group = db.query(user_group).filter(
+        user_group.c.user_id == current_user.id,
+        user_group.c.group_id == group_id
+    ).first()
+
+    if not user_in_group:
+        raise HTTPException(status_code=403, detail="User not in group")
+
+    # 创建消息
     db_message = Message(
         content=message.content,
         message_type=message.message_type,
-        file_url=message.file_url,
-        file_name=message.file_name,
-        file_size=message.file_size,
         sender_id=current_user.id,
-        group_id=group_id
+        group_id=group_id,
+        created_at=datetime.now()
     )
-    
+
     db.add(db_message)
     db.commit()
     db.refresh(db_message)
-    
-    # 关联发送者
-    db_message.sender = current_user
-    
+
     return db_message
 
 
 @router.get("/groups/{group_id}/messages/", response_model=List[MessageResponse])
 def read_group_messages(
-    group_id: int,
-    skip: int = 0,
-    limit: int = 100,
-    current_user: User = Depends(get_current_active_user),
-    db: Session = Depends(get_db)
+        group_id: int,
+        skip: int = 0,
+        limit: int = 100,
+        current_user: User = Depends(get_current_active_user),
+        db: Session = Depends(get_db)
 ):
-    """获取特定群组的消息"""
-    # 检查群组是否存在
-    group = db.query(Group).filter(Group.id == group_id).first()
-    if not group:
-        raise HTTPException(
-            status_code=status.HTTP_404_NOT_FOUND,
-            detail="群组不存在"
-        )
-    
-    # 检查用户是否在群组中
-    if current_user not in group.members:
-        raise HTTPException(
-            status_code=status.HTTP_403_FORBIDDEN,
-            detail="您不是该群组成员"
-        )
-    
+    """获取群组消息"""
+    # 验证用户是否在群组中
+    user_in_group = db.query(user_group).filter(
+        user_group.c.user_id == current_user.id,
+        user_group.c.group_id == group_id
+    ).first()
+
+    if not user_in_group:
+        raise HTTPException(status_code=403, detail="User not in group")
+
     # 获取消息
-    messages = db.query(Message).filter(Message.group_id == group_id).order_by(Message.created_at).offset(skip).limit(limit).all()
-    
+    messages = db.query(Message).filter(
+        Message.group_id == group_id
+    ).order_by(
+        Message.created_at.asc()
+    ).offset(skip).limit(limit).all()
+
     return messages
 
 
 # 文件访问路由
 @router.get("/uploads/{file_path:path}")
-def get_upload_file(file_path: str = Path(...)):
+def get_file(file_path: str):
     """获取上传的文件"""
-    file_path = os.path.join("uploads", file_path)
-    
-    if not os.path.exists(file_path):
-        raise HTTPException(
-            status_code=status.HTTP_404_NOT_FOUND,
-            detail="文件不存在"
-        )
-    
-    return FileResponse(file_path)
+    file_location = f"uploads/{file_path}"
+    if not os.path.isfile(file_location):
+        raise HTTPException(status_code=404, detail="File not found")
+    return FileResponse(file_location)

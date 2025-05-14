@@ -69,25 +69,34 @@ async def get_current_user(token: str = Depends(oauth2_scheme), db: Session = De
     """获取当前用户"""
     credentials_exception = HTTPException(
         status_code=status.HTTP_401_UNAUTHORIZED,
-        detail="无法验证凭据",
-        headers={"WWW-Authenticate": "Bearer"},
+        detail="Could not validate credentials",
+        headers={"WWW-Authenticate": "Bearer"}
     )
+
     try:
+        # 解码JWT令牌
         payload = jwt.decode(token, SECRET_KEY, algorithms=[ALGORITHM])
-        username: str = payload.get("sub")
+        username = payload.get("sub")
         if username is None:
             raise credentials_exception
         token_data = TokenData(username=username)
     except JWTError:
         raise credentials_exception
 
+    # 从数据库获取用户
     user = get_user(db, username=token_data.username)
     if user is None:
         raise credentials_exception
+
+    # 更新用户最后活动时间
+    user.last_activity = datetime.now()
+    db.commit()
+
     return user
+
 
 async def get_current_active_user(current_user: User = Depends(get_current_user)):
     """获取当前活跃用户"""
     if not current_user.is_active:
-        raise HTTPException(status_code=400, detail="用户未激活")
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Inactive user")
     return current_user

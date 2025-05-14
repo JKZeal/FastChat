@@ -66,5 +66,18 @@ app.use(ElementPlus, {
 
 // 使用路由
 app.use(router)
-
 app.mount('#app')
+
+// import { nextTick } from 'vue'
+// app.use(router)
+// router.isReady().then(() => {
+//   app.mount('#app')
+//   if (window.location.pathname === '/' || window.location.pathname === '') {
+//     const token = localStorage.getItem('token')
+//     if (token) {
+//       router.replace('/groups')
+//     } else {
+//       router.replace('/login')
+//     }
+//   }
+// })
