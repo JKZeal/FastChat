@@ -1,107 +1,113 @@
 <template>
   <div class="group-container">
-    <!-- 三栏布局 -->
-    <el-container class="full-height">
+    <!-- 使用响应式栅格布局 -->
+    <el-row class="full-height">
       <!-- 左侧: 个人资料区域 -->
-      <el-aside width="250px" class="profile-sidebar">
-        <div class="user-profile-card">
-          <div class="avatar-container" @click="showAvatarSelector = true">
-            <el-avatar :size="80" :src="userProfile.avatar_url || '/avatar/avatar0.png'"></el-avatar>
-            <div class="avatar-edit-overlay">
-              <el-icon><Edit /></el-icon>
+      <el-col :xs="24" :sm="24" :md="6" :lg="6" :xl="5" class="col-section">
+        <div class="profile-sidebar">
+          <div class="user-profile-card">
+            <div class="avatar-container" @click="showAvatarSelector = true">
+              <el-avatar :size="80" :src="userProfile.avatar_url || '/avatar/avatar0.png'"></el-avatar>
+              <div class="avatar-edit-overlay">
+                <el-icon><Edit /></el-icon>
+              </div>
             </div>
-          </div>
-          <h3>{{ userProfile.username }}</h3>
+            <h3>{{ userProfile.username }}</h3>
 
-          <div class="bio-section" @click="showBioEditor = true">
-            <p v-if="userProfile.bio" class="bio-text">{{ userProfile.bio }}</p>
-            <p v-else class="no-bio">点击添加个人简介</p>
-            <div class="bio-edit-overlay">
-              <el-icon><Edit /></el-icon>
+            <div class="bio-section" @click="showBioEditor = true">
+              <p v-if="userProfile.bio" class="bio-text">{{ userProfile.bio }}</p>
+              <p v-else class="no-bio">点击添加个人简介</p>
+              <div class="bio-edit-overlay">
+                <el-icon><Edit /></el-icon>
+              </div>
             </div>
           </div>
         </div>
-      </el-aside>
+      </el-col>
 
       <!-- 中部: 我的群组 -->
-      <el-main class="groups-main">
-        <div class="section-header">
-          <h2>我的群组</h2>
-          <el-button type="primary" @click="showCreateGroupDialog = true" :icon="Plus">创建群组</el-button>
-        </div>
+      <el-col :xs="24" :sm="24" :md="12" :lg="12" :xl="13" class="col-section">
+        <div class="groups-main">
+          <div class="section-header">
+            <h2>我的群组</h2>
+            <el-button type="primary" @click="showCreateGroupDialog = true" :icon="Plus">创建群组</el-button>
+          </div>
 
-        <div class="groups-list">
-          <el-empty v-if="myGroups.length === 0" description="您还没有加入任何群组" />
-          <el-card
-            v-for="group in myGroups"
-            :key="group.id"
-            class="group-card"
-            @click="enterChat(group.id)"
-          >
-            <div class="group-card-content">
-              <div class="group-header">
-                <div class="group-id">#{{ group.id }}</div>
-                <h3>{{ group.name }}</h3>
+          <div class="groups-list">
+            <el-empty v-if="myGroups.length === 0" description="您还没有加入任何群组" />
+            <el-card
+              v-for="group in myGroups"
+              :key="group.id"
+              class="group-card"
+              @click="enterChat(group.id)"
+            >
+              <div class="group-card-content">
+                <div class="group-header">
+                  <div class="group-id">#{{ group.id }}</div>
+                  <h3>{{ group.name }}</h3>
+                </div>
+                <p class="group-description">{{ group.description || '没有描述' }}</p>
               </div>
-              <p class="group-description">{{ group.description || '没有描述' }}</p>
-            </div>
-          </el-card>
+            </el-card>
+          </div>
         </div>
-      </el-main>
+      </el-col>
 
       <!-- 右侧: 发现群组 -->
-      <el-aside width="300px" class="discover-sidebar">
-        <div class="search-section">
-          <h2>发现群组</h2>
-          <el-input
-            v-model="searchQuery"
-            placeholder="搜索群组..."
-            clearable
-            @clear="clearSearch"
-          >
-            <template #suffix>
-              <el-button :icon="Search" circle @click="searchGroups" :loading="isSearching"></el-button>
-            </template>
-          </el-input>
-        </div>
+      <el-col :xs="24" :sm="24" :md="6" :lg="6" :xl="6" class="col-section">
+        <div class="discover-sidebar">
+          <div class="search-section">
+            <h2>发现群组</h2>
+            <el-input
+              v-model="searchQuery"
+              placeholder="搜索群组..."
+              clearable
+              @clear="clearSearch"
+            >
+              <template #suffix>
+                <el-button :icon="Search" circle @click="searchGroups" :loading="isSearching"></el-button>
+              </template>
+            </el-input>
+          </div>
 
-        <div class="search-results">
-          <el-empty
-            v-if="searchQuery && searchAttempted && searchResults.length === 0"
-            description="未找到匹配的群组"
-          />
-          <div v-else-if="!searchQuery && !searchAttempted" class="search-prompt">
-            <el-icon><Search /></el-icon>
-            <p>输入关键词搜索群组</p>
-          </div>
-          <!-- 简化的搜索结果卡片 -->
-          <div
-            v-else
-            v-for="group in searchResults"
-            :key="group.id"
-            class="search-result-item"
-          >
-            <div class="search-result-header">
-              <span class="search-result-id">#{{ group.id }}</span>
-              <span class="search-result-name">{{ group.name }}</span>
+          <div class="search-results">
+            <el-empty
+              v-if="searchQuery && searchAttempted && searchResults.length === 0"
+              description="未找到匹配的群组"
+            />
+            <div v-else-if="!searchQuery && !searchAttempted" class="search-prompt">
+              <el-icon><Search /></el-icon>
+              <p>输入关键词搜索群组</p>
             </div>
-            <div class="search-result-actions">
-              <el-button
-                type="primary"
-                size="small"
-                @click.stop="joinGroup(group.id)"
-                :disabled="isGroupJoined(group.id)"
-              >
-                {{ isGroupJoined(group.id) ? '已加入' : '加入' }}
-              </el-button>
+            <!-- 简化的搜索结果卡片 -->
+            <div
+              v-else
+              v-for="group in searchResults"
+              :key="group.id"
+              class="search-result-item"
+            >
+              <div class="search-result-header">
+                <span class="search-result-id">#{{ group.id }}</span>
+                <span class="search-result-name">{{ group.name }}</span>
+              </div>
+              <div class="search-result-actions">
+                <el-button
+                  type="primary"
+                  size="small"
+                  @click.stop="joinGroup(group.id)"
+                  :disabled="isGroupJoined(group.id)"
+                >
+                  {{ isGroupJoined(group.id) ? '已加入' : '加入' }}
+                </el-button>
+              </div>
             </div>
           </div>
         </div>
-      </el-aside>
-    </el-container>
+      </el-col>
+    </el-row>
 
     <!-- 头像选择器弹窗 -->
-    <el-dialog v-model="showAvatarSelector" title="选择头像" width="400px">
+    <el-dialog v-model="showAvatarSelector" title="选择头像" width="90%" :max-width="400">
       <div class="avatar-grid">
         <div
           v-for="avatar in availableAvatars"
@@ -120,14 +126,14 @@
     </el-dialog>
 
     <!-- 个人简介编辑器弹窗 -->
-    <el-dialog v-model="showBioEditor" title="编辑个人简介" width="400px">
+    <el-dialog v-model="showBioEditor" title="编辑个人简介" width="80%" :max-width="400">
       <el-input
         v-model="editableProfile.bio"
         type="textarea"
         placeholder="写一些关于你自己的内容..."
         :rows="5"
-        :autosize="{ minRows: 3, maxRows: 8 }"
-        maxlength="200"
+        :autosize="{ minRows: 6, maxRows: 12 }"
+        maxlength="500"
         show-word-limit
         class="bio-textarea"
       ></el-input>
@@ -138,7 +144,7 @@
     </el-dialog>
 
     <!-- 创建群组对话框 -->
-    <el-dialog v-model="showCreateGroupDialog" title="创建新群组" width="500px">
+    <el-dialog v-model="showCreateGroupDialog" title="创建新群组" width="90%" :max-width="500">
       <el-form
         :model="newGroup"
         label-position="top"
@@ -154,7 +160,7 @@
             type="textarea"
             placeholder="描述这个群组的用途..."
             :rows="3"
-            maxlength="500"
+            maxlength="50"
             show-word-limit
           ></el-input>
         </el-form-item>
@@ -168,7 +174,7 @@
 </template>
 
 <script setup>
-import { ref, onMounted, reactive, onBeforeUnmount } from 'vue';
+import { ref, onMounted, reactive, onBeforeUnmount, computed } from 'vue';
 import { useRouter } from 'vue-router';
 import axios from 'axios';
 import { ElMessage } from 'element-plus';
@@ -176,6 +182,15 @@ import { Plus, Search, Edit } from '@element-plus/icons-vue';
 
 const router = useRouter();
 const availableAvatars = ref([]);
+
+// 响应式设计相关
+const windowWidth = ref(window.innerWidth);
+const isMobile = computed(() => windowWidth.value < 768);
+const isTablet = computed(() => windowWidth.value >= 768 && windowWidth.value < 992);
+
+const updateWindowWidth = () => {
+  windowWidth.value = window.innerWidth;
+};
 
 // 移除状态相关的字段
 const userProfile = ref({
@@ -214,7 +229,7 @@ const groupFormRules = {
     { validator: validateGroupName, trigger: 'blur' }
   ],
   description: [
-    { max: 500, message: '描述不能超过500个字符', trigger: 'blur' }
+    { max: 50, message: '描述不能超过50个字符', trigger: 'blur' }
   ]
 };
 
@@ -444,8 +459,7 @@ const handleVisibilityChange = () => {
 // 生命周期钩子
 onMounted(() => {
   document.addEventListener('visibilitychange', handleVisibilityChange);
-
-  // 移除beforeunload事件中的logout请求
+  window.addEventListener('resize', updateWindowWidth);
 
   // 初始化数据获取
   fetchAvailableAvatars();
@@ -455,6 +469,7 @@ onMounted(() => {
 
 onBeforeUnmount(() => {
   document.removeEventListener('visibilitychange', handleVisibilityChange);
+  window.removeEventListener('resize', updateWindowWidth);
 });
 </script>
 
@@ -469,6 +484,12 @@ onBeforeUnmount(() => {
   height: 100%;
 }
 
+/* 列布局样式 */
+.col-section {
+  height: 100%;
+  overflow-y: auto;
+}
+
 /* 左侧个人资料栏 */
 .profile-sidebar {
   background-color: #f9f9f9;
@@ -476,6 +497,7 @@ onBeforeUnmount(() => {
   padding: 20px;
   display: flex;
   flex-direction: column;
+  height: 100%;
 }
 
 .user-profile-card {
@@ -553,8 +575,8 @@ onBeforeUnmount(() => {
 /* 中部群组列表 */
 .groups-main {
   padding: 20px;
-  overflow-y: auto;
   background-color: #fff;
+  height: 100%;
 }
 
 .section-header {
@@ -630,7 +652,7 @@ onBeforeUnmount(() => {
   background-color: #f9f9f9;
   border-left: 1px solid #e4e4e4;
   padding: 20px;
-  overflow-y: auto;
+  height: 100%;
 }
 
 .search-section {
@@ -712,5 +734,84 @@ onBeforeUnmount(() => {
   resize: none;
   white-space: pre-wrap;
   word-break: break-word;
+}
+
+/* 媒体查询：平板设备 */
+@media screen and (max-width: 992px) {
+  .groups-list {
+    grid-template-columns: repeat(auto-fill, minmax(200px, 1fr));
+  }
+
+  .section-header {
+    flex-direction: column;
+    align-items: flex-start;
+  }
+
+  .section-header h2 {
+    margin-bottom: 10px;
+  }
+}
+
+/* 媒体查询：移动设备 */
+@media screen and (max-width: 768px) {
+  .group-container {
+    overflow-y: auto;
+  }
+
+  .col-section {
+    height: auto;
+    min-height: 300px;
+  }
+
+  .profile-sidebar {
+    border-right: none;
+    border-bottom: 1px solid #e4e4e4;
+    padding: 15px;
+  }
+
+  .discover-sidebar {
+    border-left: none;
+    border-top: 1px solid #e4e4e4;
+    padding: 15px;
+  }
+
+  .groups-main {
+    padding: 15px;
+  }
+
+  .groups-list {
+    grid-template-columns: 1fr;
+  }
+
+  .user-profile-card {
+    padding: 10px 0;
+  }
+
+  .section-header {
+    flex-direction: column;
+    align-items: flex-start;
+    gap: 10px;
+  }
+
+  .section-header h2 {
+    margin: 0;
+  }
+
+  .search-result-item {
+    flex-direction: column;
+    align-items: flex-start;
+  }
+
+  .search-result-actions {
+    margin-top: 10px;
+    align-self: flex-end;
+  }
+}
+
+/* 小型移动设备 */
+@media screen and (max-width: 480px) {
+  .avatar-grid {
+    grid-template-columns: repeat(3, 1fr);
+  }
 }
 </style>

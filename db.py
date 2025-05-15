@@ -2,6 +2,7 @@ from sqlalchemy import create_engine, Column, Integer, String, DateTime, Boolean
 from sqlalchemy.ext.declarative import declarative_base
 from sqlalchemy.orm import sessionmaker, relationship
 import datetime
+import sqlite3
 
 # 创建SQLite数据库引擎
 SQLALCHEMY_DATABASE_URL = "sqlite:///./sqlite.db"
@@ -80,7 +81,20 @@ def get_db():
         db.close()
 
 
+# 配置WAL模式
+def enable_wal_mode():
+    """启用SQLite的WAL模式以提高并发性能"""
+    conn = sqlite3.connect("./sqlite.db")
+    conn.execute("PRAGMA journal_mode=WAL;")
+    conn.execute("PRAGMA synchronous=NORMAL;")
+    result = conn.execute("PRAGMA journal_mode;").fetchone()[0]
+    conn.commit()
+    conn.close()
+    return result
+
+
 # 初始化数据库
 def init_db():
     Base.metadata.create_all(bind=engine)
-    print("数据库表已创建")
+    wal_mode = enable_wal_mode()
+    print(f"SQLite WAL模式已启用")

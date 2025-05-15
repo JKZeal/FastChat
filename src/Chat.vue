@@ -3,7 +3,7 @@
     <!-- 三栏布局 -->
     <el-container class="full-height">
       <!-- 左侧：群组列表 -->
-      <el-aside width="200px" class="group-sidebar">
+      <el-aside :width="isMobile ? '0' : '200px'" class="group-sidebar" :class="{ 'mobile-visible': isMobile && showGroupSidebar }">
         <div class="sidebar-header">
           <div class="user-info">
             <el-avatar :size="32" :src="userProfile.avatar_url || '/avatar/avatar0.png'"></el-avatar>
@@ -36,6 +36,13 @@
 
       <!-- 中部：聊天区域 -->
       <el-main class="chat-area">
+        <!-- 移动端导航栏 -->
+        <div v-if="isMobile" class="mobile-nav">
+          <el-button link :icon="Menu" @click.stop="toggleSidebar('group')" />
+          <div class="chat-group-title">{{ groupInfo?.name || '聊天室' }}</div>
+          <el-button link :icon="User" @click.stop="toggleSidebar('members')" />
+        </div>
+
         <!-- 消息区域 -->
         <el-scrollbar ref="chatAreaScrollbar" class="message-wrapper">
           <template v-if="messages.length > 0">
@@ -49,8 +56,8 @@
                 <el-avatar class="message-avatar" :size="36" :src="msg.sender.avatar_url || '/avatar/avatar0.png'"></el-avatar>
                 <div class="message-content">
                   <div class="message-username">{{ msg.sender.username }}</div>
-                  <!-- 渲染消息内容，支持识别[img]标签 -->
-                  <div class="message-bubble" v-html="formatMessageContent(msg.content)"></div>
+                  <!-- 渲染消息内容，支持HTML渲染 -->
+                  <div class="message-bubble" v-html="msg.content"></div>
                   <div class="message-time">{{ formatTime(msg.created_at) }}</div>
                 </div>
               </div>
@@ -99,15 +106,31 @@
                 </div>
               </div>
             </el-popover>
+
+            <!-- 视频按钮 -->
+            <el-popover
+              placement="top"
+              width="400"
+              trigger="click">
+              <template #reference>
+                <el-button :icon="VideoPlay" type="primary" plain></el-button>
+              </template>
+              <div class="video-url-input">
+                <el-input v-model="videoUrl" placeholder="输入Bilibili或YouTube视频链接" size="small"></el-input>
+                <div class="popover-footer">
+                  <el-button type="primary" size="small" @click="insertVideoUrl">插入</el-button>
+                </div>
+              </div>
+            </el-popover>
           </div>
 
           <div class="message-input-container">
             <el-input
               v-model="newMessage"
               type="textarea"
-              :rows="3"
+              :rows="isMobile ? 2 : 3"
               resize="none"
-              placeholder="输入消息... (使用 [img]图片URL[/img] 插入图片，Shift+Enter 换行)"
+              placeholder="请输入消息, 支持图片和视频嵌入...(Shift+Enter换行; Enter发送 )"
               class="message-input"
               @keyup.shift.enter.prevent
               @keyup.enter="handleEnterKey"
@@ -119,9 +142,10 @@
       </el-main>
 
       <!-- 右侧：成员列表 -->
-      <el-aside width="200px" class="members-list">
+      <el-aside :width="isMobile ? '0' : '200px'" class="members-list" :class="{ 'mobile-visible': isMobile && showMembersSidebar }">
         <div class="members-header">
           <h3>成员列表 ({{ groupMembers.length }})</h3>
+          <el-button v-if="isMobile" link :icon="Close" @click.stop="toggleSidebar('members')" />
         </div>
         <div class="members-container">
           <div v-for="member in sortedMembers" :key="member.id" class="member-item">
@@ -141,6 +165,13 @@
     <div v-if="imagePreviewVisible" class="image-preview-overlay" @click="closePreview">
       <img :src="previewingImage" class="preview-image" @click.stop />
     </div>
+
+    <!-- 侧边栏遮罩层 - 用于移动端 -->
+    <div
+      v-if="isMobile && (showGroupSidebar || showMembersSidebar)"
+      class="sidebar-overlay"
+      @click="closeAllSidebars"
+    ></div>
   </div>
 </template>
 
@@ -149,7 +180,45 @@ import { ref, onMounted, onBeforeUnmount, nextTick, watch, computed } from 'vue'
 import { useRoute, useRouter } from 'vue-router';
 import axios from 'axios';
 import { ElMessage } from 'element-plus';
-import { Back, Picture } from '@element-plus/icons-vue';
+import { Back, Picture, VideoPlay, Menu, User, Close } from '@element-plus/icons-vue';
+
+// ========== 响应式设计相关 ==========
+const windowWidth = ref(window.innerWidth);
+const isMobile = computed(() => windowWidth.value < 768);
+const isTablet = computed(() => windowWidth.value >= 768 && windowWidth.value < 992);
+
+const showGroupSidebar = ref(false);
+const showMembersSidebar = ref(false);
+
+const updateWindowWidth = () => {
+  windowWidth.value = window.innerWidth;
+  // 在非移动设备上，自动隐藏侧边栏
+  if (!isMobile.value) {
+    showGroupSidebar.value = false;
+    showMembersSidebar.value = false;
+  }
+};
+
+// 切换侧边栏显示
+const toggleSidebar = (type) => {
+  if (type === 'group') {
+    showGroupSidebar.value = !showGroupSidebar.value;
+    if (showGroupSidebar.value) {
+      showMembersSidebar.value = false; // 确保只有一个侧边栏打开
+    }
+  } else if (type === 'members') {
+    showMembersSidebar.value = !showMembersSidebar.value;
+    if (showMembersSidebar.value) {
+      showGroupSidebar.value = false; // 确保只有一个侧边栏打开
+    }
+  }
+};
+
+// 关闭所有侧边栏
+const closeAllSidebars = () => {
+  showGroupSidebar.value = false;
+  showMembersSidebar.value = false;
+};
 
 // ========== 路由相关 ==========
 const route = useRoute();
@@ -185,6 +254,9 @@ const imageUrl = ref('');
 const imagePreviewVisible = ref(false);
 const previewingImage = ref('');
 
+// 视频相关
+const videoUrl = ref('');
+
 // Emoji相关
 const commonEmojis = ref([
   '😊','😂','🤗','🤓','😎','😘','🤔',
@@ -201,20 +273,6 @@ const sortedMembers = computed(() => {
 });
 
 // ========== 消息处理函数 ==========
-// 格式化消息内容，处理[img]标签
-const formatMessageContent = (content) => {
-  if (!content) return '';
-
-  // 替换[img]标签为实际的img元素
-  return content.replace(/\[img\](.*?)\[\/img\]/g, (match, url) => {
-    if (isValidImageUrl(url)) {
-      return `<img src="${url}" class="message-image" onclick="window.previewImage('${url}')">`;
-    } else {
-      return match; // 如果不是有效的图片URL，保持原样
-    }
-  });
-};
-
 // 格式化时间显示
 const formatTime = (timestamp) => {
   const date = new Date(timestamp);
@@ -238,10 +296,10 @@ const isValidImageUrl = (url) => {
   }
 };
 
-// 插入图片URL到消息输入框
+// 插入图片HTML到消息输入框
 const insertImageUrl = () => {
   if (imageUrl.value.trim()) {
-    const imgTag = `[img]${imageUrl.value.trim()}[/img]`;
+    const imgTag = `<img src="${imageUrl.value.trim()}" onclick="window.previewImage('${imageUrl.value.trim()}')">`;
     newMessage.value += newMessage.value ? '\n' + imgTag : imgTag;
     imageUrl.value = '';
   }
@@ -256,6 +314,64 @@ const closePreview = () => {
 window.previewImage = (url) => {
   previewingImage.value = url;
   imagePreviewVisible.value = true;
+};
+
+// ========== 视频处理函数 ==========
+// 将Bilibili链接转换为嵌入代码
+const convertBilibiliUrl = (url) => {
+  // 从B站链接提取BV号
+  const bvMatch = url.match(/\/(?:video\/)(BV[a-zA-Z0-9]+)/);
+  if (bvMatch && bvMatch[1]) {
+    const bvid = bvMatch[1];
+    return `<iframe src="//player.bilibili.com/player.html?bvid=${bvid}&page=1" scrolling="no" border="0" frameborder="no" framespacing="0" allowfullscreen="true" style="width: 100%; height: 360px;"></iframe>`;
+  }
+  return null;
+};
+
+// 将YouTube链接转换为嵌入代码
+const convertYoutubeUrl = (url) => {
+  // 处理不同格式的YouTube链接
+  let videoId;
+
+  // 标准格式 https://www.youtube.com/watch?v=VIDEO_ID
+  const standardMatch = url.match(/youtube\.com\/watch\?v=([^&]+)/);
+  if (standardMatch) {
+    videoId = standardMatch[1];
+  } else {
+    // 短链接格式 https://youtu.be/VIDEO_ID
+    const shortMatch = url.match(/youtu\.be\/([^?&]+)/);
+    if (shortMatch) {
+      videoId = shortMatch[1];
+    }
+  }
+
+  if (videoId) {
+    return `<iframe width="100%" height="315" src="https://www.youtube.com/embed/${videoId}" title="YouTube video player" frameborder="0" allow="accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture; web-share" referrerpolicy="strict-origin-when-cross-origin" allowfullscreen></iframe>`;
+  }
+  return null;
+};
+
+// 插入视频嵌入代码到消息输入框
+const insertVideoUrl = () => {
+  if (!videoUrl.value.trim()) return;
+
+  let embedCode = null;
+
+  // 检查是否是Bilibili链接
+  if (videoUrl.value.includes('bilibili.com')) {
+    embedCode = convertBilibiliUrl(videoUrl.value);
+  }
+  // 检查是否是YouTube链接
+  else if (videoUrl.value.includes('youtube.com') || videoUrl.value.includes('youtu.be')) {
+    embedCode = convertYoutubeUrl(videoUrl.value);
+  }
+
+  if (embedCode) {
+    newMessage.value += newMessage.value ? '\n' + embedCode : embedCode;
+    videoUrl.value = '';
+  } else {
+    ElMessage.warning('无法识别的视频链接格式');
+  }
 };
 
 // ========== Emoji处理函数 ==========
@@ -298,6 +414,10 @@ const sendMessage = () => {
     ws.value.send(JSON.stringify(messageObj));
     // 清空输入
     newMessage.value = '';
+    // 发送后关闭移动端侧边栏
+    if (isMobile.value) {
+      closeAllSidebars();
+    }
   } catch (e) {
     console.error('发送消息失败:', e);
     ElMessage.error('发送消息失败');
@@ -479,6 +599,10 @@ const goToGroups = () => {
 const switchGroup = (newGroupId) => {
   if (newGroupId !== parseInt(groupId.value)) {
     router.push(`/chat/${newGroupId}`);
+    // 切换群组时关闭侧边栏
+    if (isMobile.value) {
+      closeAllSidebars();
+    }
   }
 };
 
@@ -531,6 +655,9 @@ onMounted(async () => {
   try {
     console.log('Chat组件挂载，groupId:', groupId.value);
 
+    // 添加窗口大小变化监听
+    window.addEventListener('resize', updateWindowWidth);
+
     // 加载基础数据
     await Promise.all([
       fetchUserProfile(),
@@ -548,6 +675,9 @@ onMounted(async () => {
 // 组件卸载
 onBeforeUnmount(() => {
   console.log('聊天组件卸载中...');
+
+  // 移除窗口大小变化监听
+  window.removeEventListener('resize', updateWindowWidth);
 
   // 清除重连计时器
   clearReconnectTimer();
@@ -567,10 +697,22 @@ onBeforeUnmount(() => {
 .chat-container {
   height: 100%;
   overflow: hidden;
+  position: relative;
 }
 
 .full-height {
   height: 100%;
+}
+
+/* ========== 侧边栏遮罩层 ========== */
+.sidebar-overlay {
+  position: fixed;
+  top: 0;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  background-color: rgba(0, 0, 0, 0.5);
+  z-index: 1400;
 }
 
 /* ========== 左侧群组侧边栏样式 ========== */
@@ -579,6 +721,7 @@ onBeforeUnmount(() => {
   border-right: 1px solid #e6e6e6;
   display: flex;
   flex-direction: column;
+  transition: transform 0.3s ease;
 }
 
 .sidebar-header {
@@ -675,6 +818,27 @@ onBeforeUnmount(() => {
   background-color: #f8f9fa;
 }
 
+/* 移动端导航栏 */
+.mobile-nav {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  padding: 8px 15px;
+  background-color: #ffffff;
+  border-bottom: 1px solid #e6e6e6;
+  box-shadow: 0 2px 4px rgba(0,0,0,0.05);
+}
+
+.chat-group-title {
+  font-weight: bold;
+  font-size: 16px;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  flex: 1;
+  text-align: center;
+}
+
 .message-wrapper {
   flex: 1;
   padding: 15px;
@@ -753,17 +917,25 @@ onBeforeUnmount(() => {
 }
 
 /* 图片消息样式 */
-:deep(.message-image) {
+:deep(.message-bubble img) {
   max-width: 250px;
   max-height: 180px;
   border-radius: 8px;
   cursor: pointer;
   transition: transform 0.2s;
-  margin: 4px;
+  margin: 4px 0;
 }
 
-:deep(.message-image:hover) {
+:deep(.message-bubble img:hover) {
   transform: scale(1.05);
+}
+
+/* iframe视频样式 */
+:deep(.message-bubble iframe) {
+  max-width: 100%;
+  border-radius: 8px;
+  margin: 8px 0;
+  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.1);
 }
 
 /* 图片预览样式 */
@@ -844,8 +1016,8 @@ onBeforeUnmount(() => {
   border-radius: 4px;
 }
 
-/* 图片URL输入弹出层样式 */
-.image-url-input {
+/* 图片/视频URL输入弹出层样式 */
+.image-url-input, .video-url-input {
   padding: 10px;
 }
 
@@ -860,11 +1032,15 @@ onBeforeUnmount(() => {
   border-left: 1px solid #e6e6e6;
   display: flex;
   flex-direction: column;
+  transition: transform 0.3s ease;
 }
 
 .members-header {
   padding: 15px;
   border-bottom: 1px solid #e6e6e6;
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
 }
 
 .members-header h3 {
@@ -913,5 +1089,113 @@ onBeforeUnmount(() => {
   padding: 20px 0;
   text-align: center;
   color: #999;
+}
+
+/* ========== 响应式样式 ========== */
+/* 移动端侧边栏样式 */
+@media screen and (max-width: 768px) {
+  .group-sidebar, .members-list {
+    position: fixed;
+    top: 0;
+    bottom: 0;
+    width: 0 !important;
+    z-index: 1500;
+    max-width: 300px;
+  }
+
+  .group-sidebar {
+    left: 0;
+    transform: translateX(-100%); /* 默认隐藏 */
+  }
+
+  .members-list {
+    right: 0;
+    transform: translateX(100%); /* 默认隐藏 */
+  }
+
+  /* 显示时的样式 */
+  .group-sidebar.mobile-visible {
+    width: 80% !important;
+    transform: translateX(0);
+    box-shadow: 2px 0 10px rgba(0, 0, 0, 0.1);
+  }
+
+  .members-list.mobile-visible {
+    width: 80% !important;
+    transform: translateX(0);
+    box-shadow: -2px 0 10px rgba(0, 0, 0, 0.1);
+  }
+}
+
+/* 平板设备样式 */
+@media screen and (max-width: 992px) {
+  .message-content {
+    max-width: 80%;
+  }
+
+  :deep(.message-bubble img) {
+    max-width: 200px;
+    max-height: 150px;
+  }
+}
+
+/* 移动设备样式 */
+@media screen and (max-width: 768px) {
+  .message-content {
+    max-width: 85%;
+  }
+
+  .message-bubble {
+    padding: 8px 12px;
+  }
+
+  :deep(.message-bubble img) {
+    max-width: 180px;
+    max-height: 120px;
+  }
+
+  .chat-input-area {
+    padding: 10px;
+  }
+
+  .input-actions {
+    margin-bottom: 8px;
+    flex-wrap: wrap;
+  }
+
+  .message-input-container {
+    gap: 8px;
+  }
+
+  .emoji-item {
+    width: 30px;
+    height: 30px;
+  }
+}
+
+/* 小型移动设备 */
+@media screen and (max-width: 480px) {
+  .message-content {
+    max-width: 90%;
+  }
+
+  :deep(.message-bubble img) {
+    max-width: 160px;
+    max-height: 100px;
+  }
+
+  :deep(.message-bubble iframe) {
+    height: 200px;
+  }
+
+  .emoji-picker {
+    padding: 5px;
+  }
+
+  .emoji-item {
+    width: 28px;
+    height: 28px;
+    font-size: 18px;
+  }
 }
 </style>

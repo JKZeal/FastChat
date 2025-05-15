@@ -21,10 +21,7 @@ async def lifespan(app: FastAPI):
     print("应用启动...")
     init_db()
     print("数据库初始化完成")
-
     yield
-
-    # 应用关闭时执行
     print("应用关闭...")
 
 
