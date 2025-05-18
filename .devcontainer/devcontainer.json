@@ -7,7 +7,7 @@
     "ghcr.io/devcontainers/features/python:1": {
       "version": "3.12",
       "installVirtualenv": true,
-      "venvPath": "~/.venv" // 或者 ".venv"
+      "venvPath": "~/.venv"
     },
     // 安装 Node.js 22
     "ghcr.io/devcontainers/features/node:1": {
@@ -18,7 +18,7 @@
   "customizations": {
     "vscode": {
       "settings": {
-        "python.defaultInterpreterPath": "${containerWorkspaceFolder}/.venv/bin/python" // 假设 venvPath 是 ".venv"
+        "python.defaultInterpreterPath": "${containerWorkspaceFolder}/.venv/bin/python"
       },
       "extensions": [
         "ms-python.python",
