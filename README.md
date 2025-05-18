@@ -7,7 +7,7 @@ FastChat是一个基于Python和Vue技术的B/S架构的多媒体聊天应用，
 
 ## 开发环境
 - 操作系统: Windows 11 24H2
-- 运行时: CPython 3.12, Node.js 22.14
+- 运行时: CPython 3.12, Node.js 22.15
 - 包管理: Winget, pip, npm
 - 
 
@@ -47,14 +47,3 @@ FastChat是一个基于Python和Vue技术的B/S架构的多媒体聊天应用，
 4. **数据库并发**: 使用SQLite的WAL模式增强并发性能
 
 5. **无需备案**: 通过Cloudflare Tunnel实现内网应用的临时公网访问
-
-
-## 未来规划 (也许明天开始做,也许永远不做了)
-
-- 端到端加密
-- 文件上传功能
-- 私聊功能
-- 自定义主题
-- LLM助手集成
-- TTS和SVC功能
-- and so on...
