@@ -1,0 +1,41 @@
+{
+  "name": "FastAPI and Vue Development Codespace",
+  // 使用Microsoft 提供的 devcontainer 基础镜像
+  "image": "mcr.microsoft.com/devcontainers/base:ubuntu",
+
+  // 使用 devcontainer features 安装特定版本的 Python 和 Node.js
+  "features": {
+    "ghcr.io/devcontainers/features/python:1": {
+      "version": "3.12"
+    },
+    "ghcr.io/devcontainers/features/node:1": {
+       "version": "22"
+    }
+  },
+
+  // VS Code 特定设置和扩展推荐
+  "customizations": {
+    "vscode": {
+      "settings": {
+        "python.defaultInterpreterPath": "/usr/local/bin/python"
+      },
+      // 推荐安装的 VS Code 扩展列表
+      "extensions": [
+        "ms-python.python", // Python 语言支持
+        "ms-python.vscode-pylance", // 更好的 Python 智能感知和类型检查
+        "Vue.volar", // Vue 3 支持
+        "dbaeumer.vscode-eslint", // 如果你使用 ESLint 进行代码规范检查
+        "esbenp.prettier-vscode" // 如果你使用 Prettier 进行代码格式化
+      ]
+    }
+  },
+
+  // 配置 Codespaces 在本地浏览器中自动转发的端口
+  // FastAPI 后端运行在 8000 端口，Vue 前端 Vite 开发服务器运行在 5173 端口
+  "forwardPorts": [8000, 5173],
+
+  // Codespace 创建完成后自动运行的命令
+  "postCreateCommand": "pip install --upgrade pip && pip install -r requirements.txt && npm install",
+  "remoteUser": "vscode"
+  "onCreateCommand": "echo 'Running onCreateCommand...'"
+}
